@@ -9,11 +9,15 @@ output: html_notebook
 
 library(tidyverse)
 library(lubridate)
+library(rvest)
+library(stringr)
+library(glue)
+
 
 #read in reviews
-beer.rev<-read_csv("/Users/sethraithel/Google Drive/beer_reviews/beer_reviews.csv")
+#beer.rev<-read_csv("/Users/sethraithel/Google Drive/beer_reviews/beer_reviews.csv")
 #beer<-read_csv("C:/Users/Seth_Raithel/Desktop/Data project/BADV_Data/beer_reviews.csv")
-
+#beer.rev <- read_csv("beer_reviews.csv")
 ```
 
 ```{r}
@@ -125,7 +129,7 @@ rate.ind$Beer.ABV <- beer.abv[1]
 ```{r}
 "https://www.beeradvocate.com/beer/profile/423/65113/?view=beer&sort=&start=25"
 
-scrape_beer <- function(brew_id = 423) {
+scrape_beer <- function(brew_id = 35) {
   #basic brewery landing page
   brew <-
   read_html(glue("https://www.beeradvocate.com/beer/profile/{brew_id}/"))
@@ -145,6 +149,7 @@ scrape_beer <- function(brew_id = 423) {
   beer.abv <-
   brew %>% html_nodes(".hr_bottom_light:nth-child(3)") %>% html_text()
   
+  beer.num <- brew %>% html_nodes(".hr_bottom_light:nth-child(4)") %>% html_text()
   
   beer_urls <-
   brew %>% html_nodes(".hr_bottom_light:nth-child(1)") %>% html_nodes("a") %>%  html_attr('href')
@@ -154,12 +159,15 @@ scrape_beer <- function(brew_id = 423) {
   )
   
   beer_urls <- paste0("https://www.beeradvocate.com/", beer_urls)
-  beer_info <- data.frame(beer.name, beer.style, beer.abv, beer_urls, beer.id, "brewery.id"=brew_id, brewery.name)
+  
+  beer_info <- data.frame(beer.name, beer.style, beer.abv, beer_urls, beer.id, "brewery.id"=brew_id, brewery.name, beer.num)
+  beer_info <- beer_info[which(as.numeric(as.character(beer_info$beer.num)) >= 10),]
   return(beer_info)
 }
 
-#beer.urls <- brewery$beer_urls[1]
+#beer.urls <- "https://www.beeradvocate.com//beer/profile/35/137713/"
 grab_reviews <- function(beer.urls) {
+  
   beer <- read_html(as.character(beer.urls))
   
   #find review with no raitings and index
@@ -221,7 +229,8 @@ brewery.id.list <- beer.rev %>% count(brewery_id, sort = TRUE) %>% top_n(n = 100
 
 brewery.id.list <- brewery.id.list$brewery_id
 
-brewery <- scrape_beer(brew_id = 10325)
+#10099 = 64 (dogfishhead)
+brewery <- scrape_beer(brew_id = 35)
 brewery
 
 
@@ -239,8 +248,9 @@ beers.bvard[[1]]
 brew_id <- 423
 brew.bvard <- data.frame()
 
-for (i in 1:length(brewery$beer_urls[1:9])){
-  brew.bvard <- grab_reviews(brewery$beer_urls[i])
+for (i in 1:length(brewery$beer_urls[1:10])){
+  brew.bvard <- grab_reviews(as.character(brewery$beer_urls[i]))
+  brew.bvard.final <- if (i ==1) {brew.bvard}else{rbind(brew.bvard.final, brew.bvard)}
   print(i)
 }
 
@@ -251,7 +261,8 @@ brew.bvard
 ```{r}
 
 brewery_review_wrapper <- function(brewery.id.list){
-  brewery <- scrape_beer(brew_id = brewery.id.list)
+  brewery <- tryCatch(scrape_beer(brew_id = brewery.id.list), error = function(e){NA})
+  if (is.na(brewery)){}else{
   brew_id <- brewery.id.list
   beer.reviews <- as.character(brewery$beer_urls) %>% map_df(grab_reviews)
   beer.reviews$beer.id<-as.numeric(beer.reviews$beer.id)
@@ -259,20 +270,31 @@ brewery_review_wrapper <- function(brewery.id.list){
   brewery$brewery.id <- as.numeric(as.character(brewery$brewery.id))
   beer.reviews$brewery.id<-as.numeric(beer.reviews$brewery.id)
   beer.reviews <- left_join(beer.reviews, brewery, by = c("beer.id", "brewery.id"))
-  write_csv(beer.reviews,unique(glue("brewery_review_{beer.reviews$brewery.id}")))
+  write_csv(beer.reviews,unique(glue("brewery_review_{beer.reviews$brewery.id}")))}
 }
 
-beer.reviews <- brewery.id.list[2:10] %>% map_df(brewery_review_wrapper)
+beer.reviews <- brewery.id.list[11:25] %>% map_df(brewery_review_wrapper)
 
 boston.beers <- brewery.id.list[1] %>% map_df(brewery_review_wrapper)
 
-brewery <- scrape_beer(brew_id = 423)
+ c('64') %>% map_df(brewery_review_wrapper)
+
+brewery <- scrape_beer(brew_id = 10099)
+
+possibly(scrape_beer(brew_id = 10099), NA)
+brewery <- tryCatch(scrape_beer(brew_id = 10099), error = function(e){NA})
+
+is.na(brewery)
 
 beer.reviews <-  as.character(brewery$beer_urls[1:2]) %>% map_df(grab_reviews)
 
+
+
 as.character(brewery$beer_urls) %>% map_df(grab_reviews)
 
+brewery.id.list[2]
 
-
+brewery_review_wrapper(brewery.id.list[1])
+brewery.id.list<- brewery.id.list[1]
 ```
 
