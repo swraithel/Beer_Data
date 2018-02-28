@@ -1,0 +1,278 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+library(tidyverse)
+library(lubridate)
+
+#read in reviews
+beer.rev<-read_csv("/Users/sethraithel/Google Drive/beer_reviews/beer_reviews.csv")
+#beer<-read_csv("C:/Users/Seth_Raithel/Desktop/Data project/BADV_Data/beer_reviews.csv")
+
+```
+
+```{r}
+
+library(rvest)
+library(stringr)
+library(glue)
+
+#convert to date-time
+beer.rev<-beer.rev %>% mutate("Review_Datetime"=as.POSIXct(review_time,origin = "1970-01-01",tz = "GMT"))
+
+#remove time for date ploting
+beer.rev<-beer.rev %>% mutate("Review_Date"=as.Date(Review_Datetime))
+
+#add quartly by year for easy aggregation
+beer.rev<-beer.rev %>% mutate("Review_Quarter"=quarter(Review_Date,with_year=TRUE))
+
+#add abv group
+beer.rev<-beer.rev %>% mutate("ABV_Group"=cut(beer_abv,c(0,4,8,12,Inf)))
+
+#brewery's oldest review?
+beer.rev<-beer.rev %>% group_by(beer_style,brewery_name) %>% mutate("Oldest_Review"=min(Review_Quarter))
+
+#remove grouping from main dataframe
+beer.rev<-beer.rev %>% ungroup()
+
+
+#count beer styles
+beer_styles<-beer.rev %>% count(beer_style) %>% arrange(-n)
+
+#find good cut off for top styles
+fivenum(beer_styles$n)
+
+#104 unique beer styles
+#most have at least 9k
+#select top 5
+beer_styles_top5<-beer_styles %>% top_n(n=5)
+
+
+```
+
+```{r}
+beer %>% count(brewery_name, sort = TRUE)
+
+beer %>% filter(stringr::str_detect(brewery_name, "Boulevard") & stringr::str_detect(beer_name, "Wheat"))
+
+```
+```{r}
+#can we grab more reviews and recreate the original dataset
+
+#step one grab brewery id (start with boulevard)
+library(rvest)
+library(stringr)
+library(glue)
+
+brew_id <- 423
+base_url <- "https://www.beeradvocate.com/beer/profile"
+brew <- read_html(glue("https://www.beeradvocate.com/beer/profile/{brew_id}/"))
+
+brew %>% html_nodes(".hr_bottom_light b") %>% html_text()
+
+
+#beer name
+beer.name<- brew %>% html_nodes(".hr_bottom_light:nth-child(1)") %>% html_text()
+
+#beer style name
+beer.style <-brew %>% html_nodes(".hr_bottom_light:nth-child(2)") %>% html_text()
+
+#beer abv
+beer.abv<- brew %>% html_nodes(".hr_bottom_light:nth-child(3)") %>% html_text()
+
+
+beer_urls <- brew %>% html_nodes(".hr_bottom_light:nth-child(1)") %>% html_nodes("a") %>%  html_attr('href')
+
+
+
+
+beer_urls <- paste0("https://www.beeradvocate.com/",beer_urls)
+beer <- read_html(beer_urls[1])
+
+#overall rating
+rate.ov<- beer %>% html_nodes("#rating_fullview_container") %>% html_nodes(".BAscore_norm") %>% html_text()
+
+#review info
+rate.ind<- beer %>% html_nodes("#rating_fullview_container") %>% html_nodes("br+ .muted") %>% html_text()
+
+rate.ind <- str_split_fixed(rate.ind, fixed("|"), n = 5) 
+rate.ind <- data.frame(rate.ind)
+names(rate.ind) <- c("look", "smell", "taste", "feel", "overall")
+rate.ind <- rate.ind %>% mutate_all(funs(str_extract_all(.,pattern = "[\\d.]+", simplify = TRUE)))
+rate.ind$look <- c(rate.ind$look)
+rate.ind$smell <- c(rate.ind$smell)
+rate.ind$taste <- c(rate.ind$taste)
+rate.ind$feel <- c(rate.ind$feel)
+rate.ind$overall <- c(rate.ind$overall)
+rate.ind <- rate.ind[which(rate.ind$smell!=""),]
+
+#date
+rate.date <- beer %>% html_nodes("#rating_fullview_container") %>% html_nodes(".username+ a") %>% html_text()
+
+rate.ind$Date <- rate.date
+rate.ind$Beer.Name <- beer.name[1]
+rate.ind$Beer.Style <- beer.style[1]
+rate.ind$Beer.ABV <- beer.abv[1]
+```
+
+
+
+```{r}
+"https://www.beeradvocate.com/beer/profile/423/65113/?view=beer&sort=&start=25"
+
+scrape_beer <- function(brew_id = 423) {
+  #basic brewery landing page
+  brew <-
+  read_html(glue("https://www.beeradvocate.com/beer/profile/{brew_id}/"))
+  
+  #beer name
+  beer.name <-
+  brew %>% html_nodes(".hr_bottom_light:nth-child(1)") %>% html_text()
+  
+  #brewery name
+  brewery.name <- brew %>% html_nodes("h1") %>% html_text()
+  
+  #beer style name
+  beer.style <-
+  brew %>% html_nodes(".hr_bottom_light:nth-child(2)") %>% html_text()
+  
+  #beer abv
+  beer.abv <-
+  brew %>% html_nodes(".hr_bottom_light:nth-child(3)") %>% html_text()
+  
+  
+  beer_urls <-
+  brew %>% html_nodes(".hr_bottom_light:nth-child(1)") %>% html_nodes("a") %>%  html_attr('href')
+  
+  beer.id <- str_split(beer_urls, paste0("/beer/profile/",brew_id,"/"))
+  beer.id <-  str_extract_all(beer.id, pattern = "[\\d.]+", simplify = TRUE
+  )
+  
+  beer_urls <- paste0("https://www.beeradvocate.com/", beer_urls)
+  beer_info <- data.frame(beer.name, beer.style, beer.abv, beer_urls, beer.id, "brewery.id"=brew_id, brewery.name)
+  return(beer_info)
+}
+
+#beer.urls <- brewery$beer_urls[1]
+grab_reviews <- function(beer.urls) {
+  beer <- read_html(as.character(beer.urls))
+  
+  #find review with no raitings and index
+  index <-
+  str_detect(beer %>% html_nodes("#rating_fullview_container") %>% html_text(),
+  "smell:")
+  beer.review <- beer %>% html_nodes("#rating_fullview_container")
+  beer.review <- beer.review[which(index == TRUE)]
+  if (length(beer.review) == 0) {
+  rate.ind <- data.frame()
+  } else{
+  #overall rating
+  rate.ov <-
+  beer.review %>% html_nodes(".BAscore_norm") %>% html_text()
+  
+  #review info
+  rate.ind <-
+  beer.review %>% html_nodes("br+ .muted") %>% html_text()
+  
+  rate.ind <- str_split_fixed(rate.ind, fixed("|"), n = 5)
+  rate.ind <- data.frame(rate.ind)
+  names(rate.ind) <- c("look", "smell", "taste", "feel", "overall")
+  rate.ind <-
+  rate.ind %>% mutate_all(funs(str_extract_all(
+  ., pattern = "[\\d.]+", simplify = TRUE
+  )))
+  rate.ind <- data.frame(rate.ind)
+  rate.ind$look <- c(rate.ind$look)
+  rate.ind$smell <- c(rate.ind$smell)
+  rate.ind$taste <- c(rate.ind$taste)
+  rate.ind$feel <- c(rate.ind$feel)
+  rate.ind$overall <- c(rate.ind$overall)
+  rate.ind <- rate.ind[which(rate.ind$smell != ""),]
+  
+  beer.id <-
+  str_split_fixed(str_split_fixed(beer.urls, "/beer/profile/", n = 2)[, 2], "/", n = 2)[,2]
+  beer.id <-
+  str_extract_all(beer.id, pattern = "[\\d.]+", simplify = TRUE)
+  brewery.id <-
+  str_split_fixed(beer.urls, paste0("/beer/profile/"), n = 2)[, 2]
+  brewery.id <- str_split_fixed(brewery.id, "/", n = 2)[, 1]
+  #date
+  rate.date <-
+  beer.review %>% html_nodes(".username+ a") %>% html_text()
+  #certain reviews don't have raitings, need to screeen them out for older reviews
+  rate.ind$Date <- c(rate.date)
+  rate.ind$beer.id <- c(beer.id)
+  rate.ind$brewery.id <- c(brewery.id)
+  rate.ind <- as.data.frame(rate.ind)
+  }
+  return(rate.ind)
+  
+}
+```
+
+```{r}
+
+brewery.id.list <- beer.rev %>% count(brewery_id, sort = TRUE) %>% top_n(n = 100)
+
+brewery.id.list <- brewery.id.list$brewery_id
+
+brewery <- scrape_beer(brew_id = 10325)
+brewery
+
+
+dummy_function <- function (data){
+  print(paste(data$beer.style, length(data$beer.style)))
+}
+
+brewery %>% map_df(dummy_function(data = .))
+
+
+beers.bvard <- as.character(brewery$beer_urls) %>% map_df(grab_reviews)
+
+beers.bvard[[1]]
+
+brew_id <- 423
+brew.bvard <- data.frame()
+
+for (i in 1:length(brewery$beer_urls[1:9])){
+  brew.bvard <- grab_reviews(brewery$beer_urls[i])
+  print(i)
+}
+
+brew.bvard
+```
+
+
+```{r}
+
+brewery_review_wrapper <- function(brewery.id.list){
+  brewery <- scrape_beer(brew_id = brewery.id.list)
+  brew_id <- brewery.id.list
+  beer.reviews <- as.character(brewery$beer_urls) %>% map_df(grab_reviews)
+  beer.reviews$beer.id<-as.numeric(beer.reviews$beer.id)
+  brewery$beer.id <- as.numeric(as.character(brewery$beer.id))
+  brewery$brewery.id <- as.numeric(as.character(brewery$brewery.id))
+  beer.reviews$brewery.id<-as.numeric(beer.reviews$brewery.id)
+  beer.reviews <- left_join(beer.reviews, brewery, by = c("beer.id", "brewery.id"))
+  write_csv(beer.reviews,unique(glue("brewery_review_{beer.reviews$brewery.id}")))
+}
+
+beer.reviews <- brewery.id.list[2:10] %>% map_df(brewery_review_wrapper)
+
+boston.beers <- brewery.id.list[1] %>% map_df(brewery_review_wrapper)
+
+brewery <- scrape_beer(brew_id = 423)
+
+beer.reviews <-  as.character(brewery$beer_urls[1:2]) %>% map_df(grab_reviews)
+
+as.character(brewery$beer_urls) %>% map_df(grab_reviews)
+
+
+
+```
+
